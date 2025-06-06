@@ -3,7 +3,6 @@
 import type React from "react"
 import { useRef, useState } from "react"
 import { Upload, ImageIcon, Sparkles, Zap, Heart, Frown, Flame, AlertTriangle, Camera, Wand2 } from "lucide-react"
-import { processImageWithGemini } from "@/components/geminiApi"
 
 export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -14,88 +13,74 @@ export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false)
   const [result, setResult] = useState<string | null>(null)
 
-  // Helper function to extract base64 data from data URL
-  const getBase64FromDataUrl = (dataUrl: string): string => {
-    // Check if it's a data URL
-    if (dataUrl && dataUrl.split(",")[0].indexOf("base64") >= 0) {
-      // Return the base64 part
-      return dataUrl.split(",")[1]
-    }
-    return ""
-  }
-
   const handleUploadClick = () => {
     fileInputRef.current?.click()
   }
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file && (file.type === "image/jpeg" || file.type === "image/png")) {
-      const reader = new FileReader()
-      reader.onload = (event) => {
-        const img = new Image()
-        img.onload = () => {
-          // Create canvas with 16:9 aspect ratio
-          const canvas = document.createElement('canvas')
-          const ctx = canvas.getContext('2d')
-          
-          // Set target dimensions maintaining 16:9 ratio
-          const targetWidth = 1280 // standard HD width
-          const targetHeight = 720 // standard HD height (16:9)
-          
-          canvas.width = targetWidth
-          canvas.height = targetHeight
-          
-          if (ctx) {
-            // Fill with black background
-            ctx.fillStyle = 'black'
-            ctx.fillRect(0, 0, targetWidth, targetHeight)
-            
-            // Calculate scaling and position to maintain aspect ratio
-            const scale = Math.max(targetWidth / img.width, targetHeight / img.height)
-            const scaledWidth = img.width * scale
-            const scaledHeight = img.height * scale
-            const x = (targetWidth - scaledWidth) / 2
-            const y = (targetHeight - scaledHeight) / 2
-            
-            // Draw image centered
-            ctx.drawImage(img, x, y, scaledWidth, scaledHeight)
-            
-            // Convert to base64
-            const resizedImage = canvas.toDataURL(file.type)
-            setUploadedImage(resizedImage)
-            setResult(null)
-          }
+      try {
+        // Upload the file to the server first
+        const formData = new FormData()
+        formData.append("image", file)
+
+        const uploadResponse = await fetch("/api/upload", {
+          method: "POST",
+          body: formData,
+        })
+
+        if (!uploadResponse.ok) {
+          throw new Error("Failed to upload image")
         }
-        img.src = event.target?.result as string
+
+        const uploadData = await uploadResponse.json()
+
+        // Set the uploaded image for preview
+        setUploadedImage(URL.createObjectURL(file))
+        setResult(null)
+
+        console.log("Image uploaded successfully:", uploadData.imagePath)
+      } catch (error) {
+        console.error("Error uploading image:", error)
+        alert("Failed to upload image. Please try again.")
       }
-      reader.readAsDataURL(file)
     }
   }
 
-  const GeneratePerception = async (args: {
-    type: string
-    emotion: string
-    multiplier: number
-    encodedImage: string
-  }) => {
+  const GeneratePerception = async () => {
+    if (!uploadedImage) {
+      alert("Please upload an image first!")
+      return
+    }
+
     setIsGenerating(true)
     setResult(null)
 
     try {
-      console.log("Generating Perception with:", args)
+      console.log("Generating Perception with:", { type, emotion, multiplier })
 
-      // Call the Gemini processing function
-      const response = await processImageWithGemini(args)
-      console.log('Video data received on frontend');
-      
-      // The API returns a Blob
-      const videoBlob = new Blob([response], { type: 'video/mp4' });
-      console.log('Created video blob, size:', videoBlob.size);
-      
-      const videoUrl = URL.createObjectURL(videoBlob)
-      console.log('Video URL created, ready for display');
-      setResult(videoUrl)
+      // Call the API with the saved image path
+      const response = await fetch("/api/gemini", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          type,
+          emotion,
+          multiplier,
+          imagePath: "/uploads/image.jpeg", // Fixed path where image is saved
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || "Failed to generate image")
+      }
+
+      const data = await response.json()
+      setResult(data.imagePath)
     } catch (error) {
       console.error("Error generating perception:", error)
       setResult("Error generating perception. Please try again.")
@@ -131,7 +116,7 @@ export default function Home() {
             ✨ Emocio ✨
           </h1>
           <p className="text-xl text-gray-600 max-w-2xl mx-auto">
-            Transform your images with emotional perception! Upload, select, and watch the magic happen.
+            Upload an image to see how it looks from an "emotional" perspective
           </p>
         </div>
 
@@ -139,10 +124,6 @@ export default function Home() {
           {/* Left Panel - Image Upload */}
           <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-2xl p-8 border border-white/20">
             <div className="text-center mb-6">
-              <div className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-500 to-purple-500 text-white px-4 py-2 rounded-full text-sm font-medium mb-4">
-                <ImageIcon className="w-4 h-4" />
-                Image Workspace
-              </div>
             </div>
 
             <div className="relative group">
@@ -181,23 +162,22 @@ export default function Home() {
             </div>
 
             {/* Results Section */}
-            {result && (
+            {result && result !== "Error generating perception. Please try again." && (
               <div className="mt-6 p-4 bg-white/90 rounded-xl border border-purple-200 shadow-md">
-                <h3 className="text-lg font-semibold text-purple-700 mb-2">Generated Video:</h3>
+                <h3 className="text-lg font-semibold text-purple-700 mb-2">Generated Image:</h3>
                 <div className="relative w-full aspect-video">
-                  <video 
-                    controls 
-                    className="w-full h-full rounded-lg shadow-lg"
-                    src={result}
-                    onLoadedData={() => {
-                      console.log('Video loaded and ready to play');
-                      console.log('finished');
-                    }}
-                    onError={(e) => console.error('Video loading error:', e)}
-                  >
-                    Your browser does not support the video tag.
-                  </video>
+                  <img
+                    src={result || "/placeholder.svg"}
+                    alt="Generated perception"
+                    className="w-full h-full rounded-lg shadow-lg object-contain"
+                  />
                 </div>
+              </div>
+            )}
+
+            {result === "Error generating perception. Please try again." && (
+              <div className="mt-6 p-4 bg-red-50 rounded-xl border border-red-200 shadow-md">
+                <p className="text-red-600 font-medium">{result}</p>
               </div>
             )}
           </div>
@@ -302,28 +282,13 @@ export default function Home() {
                     ? "bg-gradient-to-r from-gray-400 to-gray-500 cursor-not-allowed"
                     : "bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white hover:shadow-2xl"
                 }`}
-                onClick={() => {
-                  if (!uploadedImage) {
-                    alert("Please upload an image first!")
-                    return
-                  }
-
-                  // Extract base64 data from the data URL
-                  const base64EncodedData = getBase64FromDataUrl(uploadedImage)
-
-                  GeneratePerception({
-                    type,
-                    emotion,
-                    multiplier,
-                    encodedImage: base64EncodedData, // Now passing just the base64 part
-                  })
-                }}
+                onClick={GeneratePerception}
                 disabled={isGenerating || !uploadedImage}
               >
                 {isGenerating ? (
                   <>
                     <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
-                    Generating Magic...
+                    Generating..
                   </>
                 ) : (
                   <>
